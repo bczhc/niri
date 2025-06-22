@@ -4,6 +4,7 @@ members = [
     "niri-ipc",
     "niri-visual-tests",
 ]
+exclude = ["smithay"]
 
 [workspace.package]
 version = "26.4.0"
@@ -30,6 +31,7 @@ tracy-client = { version = "0.18.4", default-features = false }
 git = "https://github.com/Smithay/smithay.git"
 rev = "ff5fa7df392cecfba049ffed55cdaa4e98a8e7ef"
 default-features = false
+#path = "./smithay"
 
 [workspace.dependencies.smithay-drm-extras]
 # version = "0.1.0"
