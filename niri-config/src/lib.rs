@@ -1782,6 +1782,7 @@ mod tests {
                     open_maximized: Some(
                         true,
                     ),
+                    open-maximized-if-alone: true,
                     open_maximized_to_edges: None,
                     open_fullscreen: Some(
                         false,

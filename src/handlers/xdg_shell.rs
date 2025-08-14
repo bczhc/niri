@@ -1108,7 +1108,8 @@ impl State {
         let mut floating_width = None;
         let mut height = None;
         let mut floating_height = None;
-        let is_full_width = rules.open_maximized.unwrap_or(false);
+        let wants_full_width = rules.open_maximized.unwrap_or(false);
+        let wants_full_width_if_alone = rules.open_maximized_if_alone.unwrap_or(false);
         let is_floating = rules.compute_open_floating(toplevel);
 
         // Tell the surface the preferred size and bounds for its likely output.
@@ -1122,7 +1123,7 @@ impl State {
             });
 
         let mut is_pending_maximized = false;
-        if let Some(ws) = ws {
+        let is_full_width = if let Some(ws) = ws {
             // Set a fullscreen and maximized state based on window request and window rule.
             is_pending_maximized = (*wants_maximized && rules.open_maximized_to_edges.is_none())
                 || rules.open_maximized_to_edges == Some(true);
@@ -1144,6 +1145,9 @@ impl State {
             height = ws.resolve_default_height(rules.default_height, false);
             floating_height = ws.resolve_default_height(rules.default_height, true);
 
+            let is_full_width =
+                wants_full_width || (wants_full_width_if_alone && !ws.has_windows());
+
             let configure_width = if is_floating {
                 floating_width
             } else if is_full_width {
@@ -1159,7 +1163,11 @@ impl State {
                 is_floating,
                 &rules,
             );
-        }
+
+            is_full_width
+        } else {
+            wants_full_width
+        };
 
         // Set the tiled state for the initial configure.
         update_tiled_state(toplevel, config.prefer_no_csd, rules.tiled_state);
