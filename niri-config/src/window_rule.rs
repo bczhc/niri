@@ -27,6 +27,8 @@ pub struct WindowRule {
     #[knuffel(child, unwrap(argument))]
     pub open_maximized: Option<bool>,
     #[knuffel(child, unwrap(argument))]
+    pub open_maximized_if_alone: Option<bool>,
+    #[knuffel(child, unwrap(argument))]
     pub open_maximized_to_edges: Option<bool>,
     #[knuffel(child, unwrap(argument))]
     pub open_fullscreen: Option<bool>,

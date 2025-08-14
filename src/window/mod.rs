@@ -61,6 +61,9 @@ pub struct ResolvedWindowRules {
     /// Whether the window should open full-width.
     pub open_maximized: Option<bool>,
 
+    /// Whether the window should open full-width if alone on the workspace.
+    pub open_maximized_if_alone: Option<bool>,
+
     /// Whether the window should open maximized to edges (true maximized).
     pub open_maximized_to_edges: Option<bool>,
 
@@ -239,6 +242,10 @@ impl ResolvedWindowRules {
 
                 if let Some(x) = rule.open_maximized {
                     resolved.open_maximized = Some(x);
+                }
+
+                if let Some(x) = rule.open_maximized_if_alone {
+                    resolved.open_maximized_if_alone = Some(x);
                 }
 
                 if let Some(x) = rule.open_maximized_to_edges {
