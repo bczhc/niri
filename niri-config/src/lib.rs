@@ -1903,6 +1903,7 @@ mod tests {
                     float_above_fullscreen: Some(true),
                     scroll_factor: None,
                     tiled_state: None,
+                    input_passthrough: None,
                     background_effect: BackgroundEffectRule {
                         xray: None,
                         blur: None,
