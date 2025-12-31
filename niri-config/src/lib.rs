@@ -747,6 +747,7 @@ mod tests {
                 transform "flipped-90"
                 position x=10 y=20
                 mode "1920x1080@144"
+                max-bpc 10
                 variable-refresh-rate on-demand=true
                 background-color "rgba(25, 25, 102, 1.0)"
                 hot-corners {
@@ -1164,6 +1165,11 @@ mod tests {
                                 y: 20,
                             },
                         ),
+                        max_bpc: Some(
+                            MaxBpc(
+                                _10,
+                            ),
+                        ),
                         mode: Some(
                             Mode {
                                 custom: false,
@@ -1210,6 +1216,7 @@ mod tests {
                         scale: None,
                         transform: Normal,
                         position: None,
+                        max_bpc: None,
                         mode: Some(
                             Mode {
                                 custom: true,
@@ -1237,6 +1244,7 @@ mod tests {
                         scale: None,
                         transform: Normal,
                         position: None,
+                        max_bpc: None,
                         mode: None,
                         modeline: Some(
                             Modeline {
