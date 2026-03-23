@@ -124,12 +124,14 @@ pub enum Action {
         #[knuffel(property(name = "show-pointer"), default = true)] bool,
         // Path; not settable from knuffel
         Option<String>,
+        String,
     ),
     ScreenshotScreen(
         #[knuffel(property(name = "write-to-disk"), default = true)] bool,
         #[knuffel(property(name = "show-pointer"), default = true)] bool,
         // Path; not settable from knuffel
         Option<String>,
+        String,
     ),
     ScreenshotWindow(
         #[knuffel(property(name = "write-to-disk"), default = true)] bool,
@@ -401,14 +403,17 @@ impl From<niri_ipc::Action> for Action {
             niri_ipc::Action::Spawn { command } => Self::Spawn(command),
             niri_ipc::Action::SpawnSh { command } => Self::SpawnSh(command),
             niri_ipc::Action::DoScreenTransition { delay_ms } => Self::DoScreenTransition(delay_ms),
-            niri_ipc::Action::Screenshot { show_pointer, path } => {
-                Self::Screenshot(show_pointer, path)
-            }
+            niri_ipc::Action::Screenshot {
+                show_pointer,
+                path,
+                id,
+            } => Self::Screenshot(show_pointer, path, id),
             niri_ipc::Action::ScreenshotScreen {
                 write_to_disk,
                 show_pointer,
                 path,
-            } => Self::ScreenshotScreen(write_to_disk, show_pointer, path),
+                id,
+            } => Self::ScreenshotScreen(write_to_disk, show_pointer, path, id),
             niri_ipc::Action::ScreenshotWindow {
                 id: None,
                 write_to_disk,
