@@ -4561,6 +4561,9 @@ fn modifiers_from_state(mods: ModifiersState) -> Modifiers {
 }
 
 fn should_activate_monitors<I: InputBackend>(event: &InputEvent<I>) -> bool {
+    // my custom change: only activate the monitor on keyboard pressed
+    return matches!(event, InputEvent::Keyboard {event} if event.state() == KeyState::Pressed);
+
     match event {
         InputEvent::Keyboard { event } if event.state() == KeyState::Pressed => true,
         InputEvent::PointerButton { event } if event.state() == ButtonState::Pressed => true,
