@@ -5786,7 +5786,11 @@ impl Niri {
 
             if let Some(id) = id {
                 thread::spawn(move || {
-                    Self::screenshot_write_result(&id, Self::SCREENSHOT_RESULT_DONE);
+                    if write_to_disk {
+                        Self::screenshot_write_result(&id, Self::SCREENSHOT_RESULT_DONE);
+                    } else {
+                        Self::screenshot_write_result(&id, Self::SCREENSHOT_RESULT_COPIED);
+                    }
                 });
             }
 
@@ -6597,6 +6601,7 @@ impl Niri {
     pub const SCREENSHOT_RESULT_DONE: &str = "done";
     pub const SCREENSHOT_RESULT_CANCELED: &str = "canceled";
     pub const SCREENSHOT_RESULT_IGNORED: &str = "ignored";
+    pub const SCREENSHOT_RESULT_COPIED: &str = "copied";
 
     pub fn screenshot_write_result(id: &str, result: &str) {
         let try_write = || -> anyhow::Result<()> {
