@@ -13,6 +13,7 @@ use anyhow::{ensure, Context};
 use bitflags::bitflags;
 use directories::UserDirs;
 use git_version::git_version;
+use png::DeflateCompression;
 use niri_config::{Config, OutputName};
 use smithay::backend::renderer::utils::{
     with_renderer_surface_state, RendererSurfaceStateUserData,
@@ -314,6 +315,8 @@ pub fn write_png_rgba8(
     let mut encoder = png::Encoder::new(w, width, height);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_deflate_compression(DeflateCompression::FdeflateUltraFast);
+    encoder.set_compression(png::Compression::Fast);
 
     let mut writer = encoder.write_header()?;
     writer.write_image_data(pixels)
