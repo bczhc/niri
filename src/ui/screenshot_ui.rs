@@ -1106,7 +1106,7 @@ impl OutputScreenshot {
 }
 
 fn action(raw: Keysym, mods: ModifiersState) -> Option<Action> {
-    if raw == Keysym::Escape {
+    if raw == Keysym::Escape || raw == Keysym::Tab {
         return Some(Action::CancelScreenshot);
     }
 
@@ -1125,7 +1125,7 @@ fn action(raw: Keysym, mods: ModifiersState) -> Option<Action> {
         });
     }
 
-    if !mods.ctrl && raw == Keysym::p {
+    if !mods.ctrl && (raw == Keysym::p || raw == Keysym::t) {
         return Some(Action::ScreenshotTogglePointer);
     }
 
