@@ -80,6 +80,8 @@ pub enum Msg {
     /// Pick a color from the screen with the mouse.
     PickColor,
     /// Perform an action.
+    /// Print information about the pointer.
+    Pointer,
     Action {
         #[command(subcommand)]
         action: Action,
