@@ -6,6 +6,7 @@ mod xdg_shell;
 use std::fs::File;
 use std::io::Write;
 use std::os::fd::OwnedFd;
+use std::path::Path;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -23,7 +24,7 @@ use smithay::reexports::wayland_protocols_wlr::screencopy::v1::server::zwlr_scre
 use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Resource;
-use smithay::utils::{Logical, Point, Rectangle, Serial};
+use smithay::utils::{Coordinate, Logical, Point, Rectangle, Serial, Size};
 use smithay::wayland::compositor::{get_parent, with_states};
 use smithay::wayland::dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier};
 use smithay::wayland::drm_lease::{
@@ -37,7 +38,9 @@ use smithay::wayland::keyboard_shortcuts_inhibit::{
     KeyboardShortcutsInhibitHandler, KeyboardShortcutsInhibitState, KeyboardShortcutsInhibitor,
 };
 use smithay::wayland::output::OutputHandler;
-use smithay::wayland::pointer_constraints::{with_pointer_constraint, PointerConstraintsHandler};
+use smithay::wayland::pointer_constraints::{
+    with_pointer_constraint, PointerConstraint, PointerConstraintRef, PointerConstraintsHandler,
+};
 use smithay::wayland::security_context::{
     SecurityContext, SecurityContextHandler, SecurityContextListenerSource,
 };
@@ -74,7 +77,7 @@ use smithay::{
 
 pub use crate::handlers::xdg_shell::KdeDecorationsModeState;
 use crate::layout::workspace::WorkspaceId;
-use crate::layout::ActivateWindow;
+use crate::layout::{ActivateWindow, LayoutElement};
 use crate::niri::{DndIcon, NewClient, State};
 use crate::protocols::ext_workspace::{self, ExtWorkspaceHandler, ExtWorkspaceManagerState};
 use crate::protocols::foreign_toplevel::{
@@ -169,9 +172,23 @@ impl PointerConstraintsHandler for State {
         pointer: &PointerHandle<Self>,
         location: Point<f64, Logical>,
     ) {
-        let is_constraint_active = with_pointer_constraint(surface, pointer, |constraint| {
-            constraint.is_some_and(|c| c.is_active())
-        });
+        let (is_constraint_active, is_locked) =
+            with_pointer_constraint(surface, pointer, |constraint| {
+                let is_active = constraint.as_ref().is_some_and(|c| c.is_active());
+                let mut is_locked = false;
+
+                if let Some(c) = &constraint {
+                    if is_active {
+                        match &**c {
+                            PointerConstraint::Confined(_) => {}
+                            PointerConstraint::Locked(_) => {
+                                is_locked = true;
+                            }
+                        }
+                    }
+                }
+                (is_active, is_locked)
+            });
 
         if !is_constraint_active {
             return;
@@ -208,7 +225,50 @@ impl PointerConstraintsHandler for State {
                 output_geometry.size -= (1, 1).into();
                 (origin + location).constrain(output_geometry.to_f64())
             });
-        pointer.set_location(target);
+
+        let mut floating_rects = Vec::new();
+
+        let focused_is_fullscreen = if let Some(w) = self.niri.layout.focus() {
+            w.sizing_mode().is_fullscreen()
+        } else {
+            false
+        };
+
+        if !focused_is_fullscreen {
+            // collect all floating window rectangles
+            self.niri
+                .layout
+                .with_windows(|_mapped, output, wid, layout| {
+                    if let Some(offset) = layout.tile_pos_in_workspace_view {
+                        // this is a floating window
+                        let window_size = layout.window_size;
+                        let rectangle = Rectangle::new(
+                            Point::<_, Logical>::new(
+                                offset.0.saturating_sub(5.0),
+                                offset.1.saturating_sub(5.0),
+                            ),
+                            Size::<_, Logical>::new(window_size.0 + 10, window_size.1 + 10)
+                                .to_f64(),
+                        );
+                        floating_rects.push(rectangle);
+                    }
+                });
+
+            // the desktop bar :)
+            floating_rects.push(Rectangle::<_, Logical>::new(
+                Point::new(0.0, 0.0),
+                Size::new(1920.0, 36.0),
+            ));
+
+            // clamp the new pointer location to the nearest edge point of these possible floating
+            // windows
+            let start = pointer.current_location();
+            let final_target = get_first_collision_point(start, target, &floating_rects);
+            pointer.set_location(final_target);
+        } else {
+            // not affected
+            pointer.set_location(target);
+        }
 
         // Redraw to update the cursor position if it's visible.
         if self.niri.pointer_visibility.is_visible() {
@@ -217,6 +277,57 @@ impl PointerConstraintsHandler for State {
         }
     }
 }
+
+/// Quick aigc stuff.
+fn get_first_collision_point(
+    start: Point<f64, Logical>,
+    target: Point<f64, Logical>,
+    rects: &[Rectangle<f64, Logical>],
+) -> Point<f64, Logical> {
+    let mut min_t = 1.0;
+    let dx = target.x - start.x;
+    let dy = target.y - start.y;
+
+    for rect in rects {
+        let mut t_near = f64::NEG_INFINITY;
+        let mut t_far = f64::INFINITY;
+
+        if dx.abs() > f64::EPSILON {
+            let t1 = (rect.loc.x - start.x) / dx;
+            let t2 = (rect.loc.x + rect.size.w - start.x) / dx;
+            t_near = t_near.max(t1.min(t2));
+            t_far = t_far.min(t1.max(t2));
+        } else if start.x <= rect.loc.x || start.x >= rect.loc.x + rect.size.w {
+            continue;
+        }
+
+        if dy.abs() > f64::EPSILON {
+            let t1 = (rect.loc.y - start.y) / dy;
+            let t2 = (rect.loc.y + rect.size.h - start.y) / dy;
+            t_near = t_near.max(t1.min(t2));
+            t_far = t_far.min(t1.max(t2));
+        } else if start.y <= rect.loc.y || start.y >= rect.loc.y + rect.size.h {
+            continue;
+        }
+
+        if t_near < t_far && t_near > 0.0 && t_near < 1.0 {
+            if t_near < min_t {
+                min_t = t_near;
+            }
+        }
+    }
+
+    if min_t < 1.0 {
+        let safety_margin = 0.1;
+        Point::new(
+            start.x + dx * min_t - dx.signum() * 0.1,
+            start.y + dy * min_t - dy.signum() * 0.1,
+        )
+    } else {
+        target
+    }
+}
+
 delegate_pointer_constraints!(State);
 
 impl InputMethodHandler for State {
