@@ -13,22 +13,27 @@ use pango::{Alignment, FontDescription};
 use pangocairo::cairo::{self, ImageSurface};
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::input::TouchSlot;
-use smithay::backend::renderer::element::utils::{Relocate, RelocateRenderElement};
-use smithay::backend::renderer::element::Kind;
+use smithay::backend::renderer::element::utils::{
+    Relocate, RelocateRenderElement, RescaleRenderElement,
+};
+use smithay::backend::renderer::element::{Element, Kind};
 use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
 use smithay::backend::renderer::{ExportMem, Texture as _};
 use smithay::input::keyboard::{Keysym, ModifiersState};
 use smithay::output::{Output, WeakOutput};
-use smithay::utils::{Buffer, Physical, Point, Rectangle, Scale, Size, Transform};
+use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, Transform};
 
 use crate::animation::{Animation, Clock};
 use crate::layout::floating::DIRECTIONAL_MOVE_PX;
+use crate::niri::{zoom_wrap, OutputRenderElements, ZoomWrapper, ZoomedRenderElements};
 use crate::niri_render_elements;
 use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
+use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 use crate::render_helpers::texture::{TextureBuffer, TextureRenderElement};
 use crate::render_helpers::{render_to_texture, RenderTarget};
 use crate::utils::to_physical_precise_round;
+use crate::utils::zoom::zoom_transform_physical_point;
 
 const SELECTION_BORDER: i32 = 2;
 
@@ -107,6 +112,15 @@ niri_render_elements! {
     ScreenshotUiRenderElement => {
         Screenshot = PrimaryGpuTextureRenderElement,
         SolidColor = SolidColorRenderElement,
+    }
+}
+
+// Internal render element for capture compositing. Only used in `capture()`
+// when zoom or pointer overlay requires compositing to an intermediate texture.
+niri_render_elements! {
+    CaptureRenderElement => {
+        Texture = PrimaryGpuTextureRenderElement,
+        Zoomed = ZoomWrapper<PrimaryGpuTextureRenderElement>,
     }
 }
 
@@ -619,11 +633,16 @@ impl ScreenshotUi {
         }
     }
 
-    pub fn render_output(
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_output<R: NiriRenderer>(
         &self,
         output: &Output,
         target: RenderTarget,
-        push: &mut dyn FnMut(ScreenshotUiRenderElement),
+        apply_zoom: bool,
+        zoom_factor: f64,
+        zoom_focal: Point<f64, Logical>,
+        scale_with_zoom: bool,
+        push: &mut dyn FnMut(OutputRenderElements<R>),
     ) {
         let _span = tracy_client::span!("ScreenshotUi::render_output");
 
@@ -642,10 +661,11 @@ impl ScreenshotUi {
             return;
         };
 
-        let scale = output_data.scale;
+        let output_scale = Scale::from(output_data.scale);
         let progress = open_anim.clamped_value().clamp(0., 1.) as f32;
+        let zoom_active = apply_zoom && zoom_factor > 1.0;
 
-        // The help panel goes on top.
+        // The help panel goes on top
         if let Some((show, hide)) = &output_data.panel {
             let buffer = if *show_pointer { hide } else { show };
             let alpha = if button.is_dragging_selection() {
@@ -655,7 +675,7 @@ impl ScreenshotUi {
             };
             let location = panel_location(output_data, buffer.texture().size())
                 .to_f64()
-                .to_logical(scale);
+                .to_logical(output_data.scale);
 
             let elem = PrimaryGpuTextureRenderElement(TextureRenderElement::from_texture_buffer(
                 buffer.clone(),
@@ -665,17 +685,66 @@ impl ScreenshotUi {
                 None,
                 Kind::Unspecified,
             ));
-            push(elem.into());
+
+            let elem = if zoom_active {
+                let elem = zoom_wrap(elem, 1.0, output_scale, zoom_focal);
+                ZoomedRenderElements::Texture(elem).into()
+            } else {
+                elem.into()
+            };
+
+            push(elem);
         }
 
+        // Solid color overlays for selection region borders, and dimming the outside of the
+        // selection.
         for (buffer, loc) in zip(&output_data.buffers, &output_data.locations) {
             let elem = SolidColorRenderElement::from_buffer(
                 buffer,
-                loc.to_f64().to_logical(scale),
+                loc.to_f64().to_logical(output_data.scale),
                 progress,
                 Kind::Unspecified,
             );
-            push(elem.into());
+
+            let elem = if zoom_active {
+                // RescaleRenderElement scales loc and size independently with separate rounding,
+                // which can cause 1-pixel gaps between adjacent elements Recompute physical edges
+                // directly instead to avoid solid-color artifacts under zoom.
+                let phys = elem.geometry(output_scale);
+
+                let base = zoom_transform_physical_point(
+                    Point::from((0, 0)),
+                    zoom_factor,
+                    zoom_focal,
+                    output_scale,
+                );
+
+                let top_left = base
+                    + phys
+                        .loc
+                        .to_f64()
+                        .upscale(Scale::from(zoom_factor))
+                        .to_i32_round::<i32>();
+                let bottom_right = base
+                    + (phys.loc + phys.size)
+                        .to_f64()
+                        .upscale(Scale::from(zoom_factor))
+                        .to_i32_round::<i32>();
+
+                let zoomed_size = bottom_right - top_left;
+                let zoomed_rect = Rectangle::new(
+                    top_left,
+                    Size::from((zoomed_size.x.max(0), zoomed_size.y.max(0))),
+                );
+
+                let elem = elem.with_geometry_physical(zoomed_rect, output_scale);
+                let zoomed_elem = zoom_wrap(elem, 1.0, output_scale, zoom_focal);
+                ZoomedRenderElements::SolidColor(zoomed_elem).into()
+            } else {
+                elem.into()
+            };
+
+            push(elem);
         }
 
         // The screenshot itself goes last.
@@ -686,17 +755,60 @@ impl ScreenshotUi {
         };
         let screenshot = &output_data.screenshot[index];
 
+        // The pointer goes on top of the screenshot, so that it doesn't get hidden under the dimmed
+        // overlay when outside the selection.
         if *show_pointer {
             if let Some(pointer) = screenshot.pointer.clone() {
-                push(pointer.into());
+                let elem = if zoom_active {
+                    let elem = if scale_with_zoom {
+                        zoom_wrap(pointer, zoom_factor, output_scale, zoom_focal)
+                    } else {
+                        let pos = pointer.geometry(output_scale).loc;
+                        let new_pos = zoom_transform_physical_point(
+                            pos,
+                            zoom_factor,
+                            zoom_focal,
+                            output_scale,
+                        );
+
+                        RelocateRenderElement::from_element(
+                            RescaleRenderElement::from_element(pointer, Point::from((0, 0)), 1.0),
+                            new_pos,
+                            Relocate::Absolute,
+                        )
+                    };
+
+                    ZoomedRenderElements::Texture(elem).into()
+                } else {
+                    pointer.into()
+                };
+
+                push(elem);
             }
         }
-        push(screenshot.buffer.clone().into());
+
+        // Apply zoom to the screenshot if applicable
+        let elem = if zoom_active {
+            let elem = zoom_wrap(
+                screenshot.buffer.clone(),
+                zoom_factor,
+                output_scale,
+                zoom_focal,
+            );
+            ZoomedRenderElements::Texture(elem).into()
+        } else {
+            screenshot.buffer.clone().into()
+        };
+
+        push(elem);
     }
 
     pub fn capture(
         &self,
         renderer: &mut GlesRenderer,
+        zoom_active: bool,
+        zoom_level: f64,
+        zoom_focal: Point<f64, Logical>,
     ) -> anyhow::Result<(Size<i32, Physical>, Vec<u8>)> {
         let _span = tracy_client::span!("ScreenshotUi::capture");
 
@@ -710,49 +822,67 @@ impl ScreenshotUi {
             panic!("screenshot UI must be open to capture");
         };
 
-        let data = &output_data[&selection.0];
+        let output = &selection.0;
+        let data = &output_data[output];
         let rect = rect_from_corner_points(selection.1, selection.2);
+        let scale = Scale::from(data.scale);
 
         let screenshot = &data.screenshot[0];
-
-        // Composite the pointer on top if needed.
         let mut tex_rect = None;
-        if *show_pointer {
-            if let Some(pointer) = screenshot.pointer.clone() {
-                let scale = pointer.0.buffer().texture_scale();
-                let offset = rect.loc.upscale(-1);
 
-                let mut elements = ArrayVec::<_, 2>::new();
-                elements.push(pointer);
-                elements.push(screenshot.buffer.clone());
-                let elements = elements.iter().rev().map(|elem| {
-                    RelocateRenderElement::from_element(elem, offset, Relocate::Relative)
-                });
+        if zoom_active || (*show_pointer && screenshot.pointer.is_some()) {
+            let output_scale = Scale::from(output.current_scale().fractional_scale());
 
-                let res = render_to_texture(
-                    renderer,
-                    rect.size,
-                    scale,
-                    Transform::Normal,
-                    Fourcc::Abgr8888,
-                    elements,
+            let mut elements = ArrayVec::<CaptureRenderElement, 3>::new();
+            if *show_pointer {
+                if let Some(pointer) = screenshot.pointer.clone() {
+                    // elements.push(CaptureRenderElement::Texture(pointer));
+                    elements.push(pointer.into());
+                }
+            }
+            elements.push(screenshot.buffer.clone().into());
+
+            if zoom_active {
+                let zoomed = zoom_wrap(
+                    screenshot.buffer.clone(),
+                    zoom_level,
+                    output_scale,
+                    zoom_focal,
                 );
-                match res {
-                    Ok((texture, _)) => {
-                        tex_rect = Some((texture, Rectangle::from_size(rect.size)));
-                    }
-                    Err(err) => {
-                        warn!("error compositing pointer onto screenshot: {err:?}");
-                    }
+                elements.push(zoomed.into());
+            }
+
+            let elements = elements.iter().rev().map(|elem| {
+                RelocateRenderElement::from_element(elem, Point::from((0, 0)), Relocate::Relative)
+            });
+
+            let res = render_to_texture(
+                renderer,
+                data.size,
+                scale,
+                Transform::Normal,
+                Fourcc::Abgr8888,
+                elements,
+            );
+            match res {
+                Ok((texture, _)) => {
+                    tex_rect = Some((texture, rect));
+                }
+                Err(err) => {
+                    warn!("error compositing screenshot capture: {err:?}");
                 }
             }
         }
 
-        let (texture, rect) = tex_rect.unwrap_or_else(|| (screenshot.texture.clone(), rect));
-        // The size doesn't actually matter because we're not transforming anything.
-        let buf_rect = rect
-            .to_logical(1)
-            .to_buffer(1, Transform::Normal, &Size::from((1, 1)));
+        let (texture, sample_rect) = tex_rect.unwrap_or_else(|| (screenshot.texture.clone(), rect));
+
+        // The size matters because we're performing the zoom transform here
+        let texture_size = data.size.to_f64().to_logical(data.scale);
+        let buf_rect = sample_rect
+            .to_f64()
+            .to_logical(data.scale)
+            .to_buffer(data.scale, Transform::Normal, &texture_size)
+            .to_i32_round::<i32>();
 
         let mapping = renderer
             .copy_texture(&texture, buf_rect, Fourcc::Abgr8888)

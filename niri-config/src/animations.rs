@@ -525,16 +525,6 @@ where
 }
 
 impl Animation {
-    pub fn new_off() -> Self {
-        Self {
-            off: true,
-            kind: Kind::Easing(EasingParams {
-                duration_ms: 0,
-                curve: Curve::Linear,
-            }),
-        }
-    }
-
     fn decode_node<S: knuffel::traits::ErrorSpan>(
         node: &knuffel::ast::SpannedNode<S>,
         ctx: &mut knuffel::decode::Context<S>,
