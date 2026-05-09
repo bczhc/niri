@@ -9,6 +9,7 @@ use niri_ipc::socket::Socket;
 use niri_ipc::{
     Action, Cast, CastKind, CastTarget, Event, KeyboardLayouts, LogicalOutput, Mode, Output,
     OutputConfigChanged, Overview, Request, Response, Transform, Window, WindowLayout, Zoom,
+    ScreenshotUiEvent,
 };
 use serde_json::json;
 
@@ -61,6 +62,7 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
         Msg::EventStream => Request::EventStream,
         Msg::RequestError => Request::ReturnError,
         Msg::OverviewState => Request::OverviewState,
+        Msg::ScreenshotState => Request::ScreenshotState,
         Msg::Casts => Request::Casts,
         Msg::ZoomState => Request::ZoomState,
     };
@@ -548,6 +550,14 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
                         };
                         println!("Config loaded {status}");
                     }
+                    Event::ScreenshotUiChanged { event } => match event {
+                        ScreenshotUiEvent::Open => println!("Screenshot UI opened"),
+                        ScreenshotUiEvent::Cancel => println!("Screenshot UI canceled"),
+                        ScreenshotUiEvent::Confirm {
+                            position,
+                            size: dimension,
+                        } => println!("Screenshot UI confirmed: {:?}", (position, dimension)),
+                    },
                     Event::ScreenshotCaptured { path } => {
                         let mut parts = vec![];
                         parts.push("copied to clipboard".to_string());
@@ -586,6 +596,25 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
                 println!("Overview is open.");
             } else {
                 println!("Overview is closed.");
+            }
+        }
+        Msg::ScreenshotState => {
+            let Response::ScreenshotState(response) = response else {
+                bail!("unexpected response: expected ScreenshotUi, got {response:?}");
+            };
+
+            if json {
+                let response =
+                    serde_json::to_string(&response).context("error formatting response")?;
+                println!("{response}");
+                return Ok(());
+            }
+
+            let is_open = response.is_open;
+            if is_open {
+                println!("Screenshot UI is open.");
+            } else {
+                println!("Screenshot UI is closed.");
             }
         }
         Msg::Casts => {

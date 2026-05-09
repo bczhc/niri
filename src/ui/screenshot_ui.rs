@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::f64::consts::TAU;
 use std::iter::zip;
 use std::rc::Rc;
+use std::thread;
 
 use anyhow::Context;
 use arrayvec::ArrayVec;
@@ -26,6 +27,7 @@ use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, T
 use crate::animation::{Animation, Clock};
 use crate::layout::floating::DIRECTIONAL_MOVE_PX;
 use crate::niri::{zoom_wrap, OutputRenderElements, ZoomWrapper, ZoomedRenderElements};
+use crate::niri::Niri;
 use crate::niri_render_elements;
 use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
 use crate::render_helpers::renderer::NiriRenderer;
@@ -69,6 +71,7 @@ pub enum ScreenshotUi {
         clock: Clock,
         config: Rc<RefCell<Config>>,
         path: Option<String>,
+        id: String,
     },
 }
 
@@ -157,6 +160,7 @@ impl ScreenshotUi {
         default_output: Output,
         show_pointer: bool,
         path: Option<String>,
+        id: String,
     ) -> bool {
         if screenshots.is_empty() {
             return false;
@@ -252,6 +256,7 @@ impl ScreenshotUi {
             clock: clock.clone(),
             config: config.clone(),
             path,
+            id,
         };
 
         self.update_buffers();
@@ -280,6 +285,38 @@ impl ScreenshotUi {
             clock: clock.clone(),
             config: config.clone(),
         };
+
+        true
+    }
+
+    pub fn user_cancel_close(&mut self) -> bool {
+        let Self::Open {
+            selection,
+            clock,
+            config,
+            id,
+            ..
+        } = self
+        else {
+            return false;
+        };
+        let id = id.clone();
+
+        let last_selection = Some((
+            selection.0.downgrade(),
+            rect_from_corner_points(selection.1, selection.2),
+        ));
+
+        *self = Self::Closed {
+            last_selection,
+            clock: clock.clone(),
+            config: config.clone(),
+        };
+
+        thread::spawn(move || {
+            let id = id;
+            Niri::screenshot_write_result(&id, Niri::SCREENSHOT_RESULT_CANCELED);
+        });
 
         true
     }
@@ -1199,7 +1236,7 @@ impl OutputScreenshot {
 }
 
 fn action(raw: Keysym, mods: ModifiersState) -> Option<Action> {
-    if raw == Keysym::Escape {
+    if raw == Keysym::Escape || raw == Keysym::Tab {
         return Some(Action::CancelScreenshot);
     }
 
@@ -1218,7 +1255,7 @@ fn action(raw: Keysym, mods: ModifiersState) -> Option<Action> {
         });
     }
 
-    if !mods.ctrl && raw == Keysym::p {
+    if !mods.ctrl && (raw == Keysym::p || raw == Keysym::t) {
         return Some(Action::ScreenshotTogglePointer);
     }
 

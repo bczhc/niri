@@ -1,14 +1,16 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
+use std::fs::{File, OpenOptions};
+use std::io::BufWriter;
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use std::{env, mem, thread};
+use std::{env, io, mem, thread};
 
 use _server_decoration::server::org_kde_kwin_server_decoration_manager::Mode as KdeDecorationsMode;
 use anyhow::{bail, ensure, Context};
@@ -18,6 +20,7 @@ use niri_config::{
     Config, FloatOrInt, Key, Modifiers, OutputName, TrackLayout, WarpMouseToFocusMode,
     WorkspaceReference, Xkb,
 };
+use niri_ipc::ScreenshotUiEvent;
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::input::Keycode;
 use smithay::backend::renderer::damage::OutputDamageTracker;
@@ -2070,10 +2073,18 @@ impl State {
         self.niri.output_management_state.notify_changes(new_config);
     }
 
-    pub fn open_screenshot_ui(&mut self, show_pointer: bool, path: Option<String>) {
+    pub fn open_screenshot_ui(&mut self, show_pointer: bool, path: Option<String>, id: String) {
         if self.niri.is_locked() || self.niri.screenshot_ui.is_open() {
+            let id = id.clone();
+            thread::spawn(move || {
+                Niri::screenshot_write_result(&id, Niri::SCREENSHOT_RESULT_IGNORED);
+            });
             return;
         }
+
+        self.niri.event_loop.insert_idle(|state| {
+            state.ipc_screenshot_ui_event(ScreenshotUiEvent::Open);
+        });
 
         let default_output = self
             .niri
@@ -2103,9 +2114,14 @@ impl State {
         }
 
         self.backend.with_primary_renderer(|renderer| {
-            self.niri
-                .screenshot_ui
-                .open(renderer, screenshots, default_output, show_pointer, path)
+            self.niri.screenshot_ui.open(
+                renderer,
+                screenshots,
+                default_output,
+                show_pointer,
+                path,
+                id,
+            )
         });
 
         self.niri
@@ -2131,9 +2147,27 @@ impl State {
     }
 
     pub fn confirm_screenshot(&mut self, write_to_disk: bool) {
-        let ScreenshotUi::Open { path, .. } = &mut self.niri.screenshot_ui else {
+        let ScreenshotUi::Open {
+            path,
+            selection,
+            id,
+            ..
+        } = &mut self.niri.screenshot_ui
+        else {
             return;
         };
+        let ss_msg_id = id.clone();
+
+        let selection_start = (selection.1.x, selection.1.y);
+        let selection_dimension = (selection.2.x - selection.1.x, selection.2.y - selection.1.y);
+        debug_assert!(selection_dimension.0 >= 0 && selection_dimension.1 >= 0);
+        self.niri.event_loop.insert_idle(move |state| {
+            state.ipc_screenshot_ui_event(ScreenshotUiEvent::Confirm {
+                position: selection_start,
+                size: selection_dimension,
+            });
+        });
+
         let path = path.take();
 
         let (zoom_active, zoom_level, zoom_focal) = self
@@ -2159,7 +2193,13 @@ impl State {
                 .capture(renderer, zoom_active, zoom_level, zoom_focal)
             {
                 Ok((size, pixels)) => {
-                    if let Err(err) = self.niri.save_screenshot(size, pixels, write_to_disk, path) {
+                    if let Err(err) = self.niri.save_screenshot(
+                        size,
+                        pixels,
+                        write_to_disk,
+                        path,
+                        Some(ss_msg_id),
+                    ) {
                         warn!("error saving screenshot: {err:?}");
                     }
                 }
@@ -6088,6 +6128,7 @@ impl Niri {
         write_to_disk: bool,
         include_pointer: bool,
         path: Option<String>,
+        id: String,
     ) -> anyhow::Result<()> {
         let _span = tracy_client::span!("Niri::screenshot");
 
@@ -6115,7 +6156,7 @@ impl Niri {
             elements,
         )?;
 
-        self.save_screenshot(size, pixels, write_to_disk, path)
+        self.save_screenshot(size, pixels, write_to_disk, path, Some(id))
             .context("error saving screenshot")
     }
 
@@ -6194,7 +6235,7 @@ impl Niri {
             elements,
         )?;
 
-        self.save_screenshot(geo.size, pixels, write_to_disk, path)
+        self.save_screenshot(geo.size, pixels, write_to_disk, path, None)
             .context("error saving screenshot")
     }
 
@@ -6204,6 +6245,7 @@ impl Niri {
         pixels: Vec<u8>,
         write_to_disk: bool,
         path_arg: Option<String>,
+        id: Option<String>,
     ) -> anyhow::Result<()> {
         let path = write_to_disk
             .then(|| {
@@ -6299,10 +6341,36 @@ impl Niri {
                 .as_ref()
                 .and_then(|p| p.to_str())
                 .map(|s| s.to_owned());
+
+            if let Some(id) = id {
+                thread::spawn(move || {
+                    if write_to_disk {
+                        Self::screenshot_write_result(&id, Self::SCREENSHOT_RESULT_DONE);
+                    } else {
+                        Self::screenshot_write_result(&id, Self::SCREENSHOT_RESULT_COPIED);
+                    }
+                });
+            }
+
             let _ = event_tx.send(path_string);
         });
 
         Ok(())
+    }
+
+    pub fn cancel_screenshot(&mut self) {
+        if !self.screenshot_ui.is_open() {
+            return;
+        }
+
+        self.event_loop.insert_idle(|state| {
+            state.ipc_screenshot_ui_event(ScreenshotUiEvent::Cancel);
+        });
+
+        self.screenshot_ui.user_cancel_close();
+        self.cursor_manager
+            .set_cursor_image(CursorImageStatus::default_named());
+        self.queue_redraw_all();
     }
 
     #[cfg(feature = "dbus")]
@@ -7159,5 +7227,37 @@ niri_render_elements! {
         // excluded from this enum to avoid confusion and potential misuse.
         // ScreenshotUi are handled separately in screenshot_ui module due to their unique
         // constraints and requirements, so they are also intentionally excluded here.
+    }
+}
+
+impl Niri {
+    pub const SCREENSHOT_RESULT_DONE: &str = "done";
+    pub const SCREENSHOT_RESULT_CANCELED: &str = "canceled";
+    pub const SCREENSHOT_RESULT_IGNORED: &str = "ignored";
+    pub const SCREENSHOT_RESULT_COPIED: &str = "copied";
+
+    pub fn screenshot_write_result(id: &str, result: &str) {
+        let try_write = || -> anyhow::Result<()> {
+            let pipe = PathBuf::from(format!("/tmp/{id}-result"));
+            debug!(
+                "screenshot_write_result called: id: {}, result: {}; pipe file: {}",
+                id,
+                result,
+                pipe.display()
+            );
+            if !pipe.exists() {
+                Err(anyhow::anyhow!(
+                    "Expected {} to be a named pipe",
+                    pipe.display()
+                ))?;
+            }
+            let pipe = File::create(pipe)?;
+            let mut pipe = BufWriter::new(pipe);
+            use io::Write;
+            writeln!(&mut pipe, "{}", result)?;
+            Ok(())
+        };
+        let r = try_write();
+        debug!("screenshot_write_result result: {:?}", r);
     }
 }

@@ -16,7 +16,11 @@ use futures_util::io::{AsyncReadExt, BufReader};
 use futures_util::{select_biased, AsyncBufReadExt, AsyncWrite, AsyncWriteExt, FutureExt as _};
 use niri_config::OutputName;
 use niri_ipc::state::{EventStreamState, EventStreamStatePart as _};
-use niri_ipc::{Action, Event, KeyboardLayouts, OutputConfigChanged, Overview, Point, Pointer, Reply, Request, Response, Timestamp, WindowLayout, Workspace};
+use niri_ipc::{Action, Event, KeyboardLayouts, OutputConfigChanged, Overview, Point, Pointer};
+use niri_ipc::{
+    Reply, Request, Response,
+    ScreenshotUi, Timestamp, WindowLayout, Workspace,
+};
 use smithay::desktop::layer_map_for_output;
 use smithay::input::pointer::{
     CursorIcon, CursorImageStatus, Focus, GrabStartData as PointerGrabStartData,
@@ -514,6 +518,11 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
             let state = ctx.event_stream_state.borrow();
             let is_open = state.overview.is_open;
             Response::OverviewState(Overview { is_open })
+        }
+        Request::ScreenshotState => {
+            let state = ctx.event_stream_state.borrow();
+            let is_open = state.screenshot_ui.is_open;
+            Response::ScreenshotState(ScreenshotUi { is_open })
         }
         Request::Casts => {
             let state = ctx.event_stream_state.borrow();
@@ -1029,6 +1038,17 @@ impl State {
         let mut state = server.event_stream_state.borrow_mut();
 
         let event = Event::ScreenshotCaptured { path };
+        state.apply(event.clone());
+        server.send_event(event);
+    }
+
+    pub fn ipc_screenshot_ui_event(&mut self, event: niri_ipc::ScreenshotUiEvent) {
+        let Some(server) = &self.niri.ipc_server else {
+            return;
+        };
+        let mut state = server.event_stream_state.borrow_mut();
+
+        let event = Event::ScreenshotUiChanged { event };
         state.apply(event.clone());
         server.send_event(event);
     }
