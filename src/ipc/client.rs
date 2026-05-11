@@ -9,7 +9,7 @@ use niri_ipc::socket::Socket;
 use niri_ipc::{
     Action, Cast, CastKind, CastTarget, Event, KeyboardLayouts, LogicalOutput, Mode, Output,
     OutputConfigChanged, Overview, Request, Response, Transform, Window, WindowLayout, Zoom,
-    ScreenshotUiEvent,
+    ScreenshotUiEvent, HasPointerConstraints,
 };
 use serde_json::json;
 
@@ -65,6 +65,7 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
         Msg::ScreenshotState => Request::ScreenshotState,
         Msg::Casts => Request::Casts,
         Msg::ZoomState => Request::ZoomState,
+        Msg::HasPointerConstraints => Request::HasPointerConstraints,
     };
 
     let mut socket = Socket::connect().context("error connecting to the niri socket")?;
@@ -656,6 +657,26 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
                 println!("  Zoom level: {:.2}", level);
                 println!("  Zoom locked: {}", if is_locked { "yes" } else { "no" });
                 println!();
+            }
+        }
+        Msg::HasPointerConstraints => {
+            let Response::HasPointerConstraints(state) = response else {
+                bail!("unexpected response: expected HasPointerConstraints, got {response:?}");
+            };
+
+            if json {
+                let state = serde_json::to_string(&state).context("error formatting response")?;
+                println!("{state}");
+                return Ok(());
+            }
+
+            let HasPointerConstraints {
+                has_pointer_constraints,
+            } = state;
+            if has_pointer_constraints {
+                println!("Pointer has constraints.");
+            } else {
+                println!("Pointer does not have constraints.");
             }
         }
     }

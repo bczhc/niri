@@ -144,6 +144,8 @@ pub enum Request {
     Casts,
     /// Request information about zoom state.
     ZoomState,
+    /// Request whether the pointer is currently grabbed.
+    HasPointerConstraints,
 }
 
 /// Reply from niri to client.
@@ -198,6 +200,16 @@ pub enum Response {
     Casts(Vec<Cast>),
     /// Map from output name to zoom state.
     ZoomState(HashMap<String, Zoom>),
+    /// Whether the pointer is currently grabbed.
+    HasPointerConstraints(HasPointerConstraints),
+}
+
+/// Whether the pointer has active pointer constraints.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct HasPointerConstraints {
+    /// Whether the pointer has pointer constraints.
+    pub has_pointer_constraints: bool,
 }
 
 /// Overview information.

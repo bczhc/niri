@@ -19,7 +19,7 @@ use niri_ipc::state::{EventStreamState, EventStreamStatePart as _};
 use niri_ipc::{Action, Event, KeyboardLayouts, OutputConfigChanged, Overview, Point, Pointer};
 use niri_ipc::{
     Reply, Request, Response,
-    ScreenshotUi, Timestamp, WindowLayout, Workspace,
+    ScreenshotUi, Timestamp, WindowLayout, Workspace, HasPointerConstraints,
 };
 use smithay::desktop::layer_map_for_output;
 use smithay::input::pointer::{
@@ -29,6 +29,7 @@ use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::{Interest, LoopHandle, Mode, PostAction};
 use smithay::reexports::rustix::fs::unlink;
 use smithay::utils::SERIAL_COUNTER;
+use smithay::wayland::pointer_constraints::with_pointer_constraint;
 use smithay::wayland::shell::wlr_layer::{KeyboardInteractivity, Layer};
 
 use crate::backend::IpcOutputMap;
@@ -553,6 +554,27 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
             let result = rx.recv().await;
             let zooms = result.map_err(|_| String::from("error getting zoom states"))?;
             Response::ZoomState(zooms)
+        }
+        Request::HasPointerConstraints => {
+            let (tx, rx) = async_channel::bounded(1);
+            ctx.event_loop.insert_idle(move |state| {
+                let pointer = state.niri.seat.get_pointer();
+                let has_pointer_constraints = pointer
+                    .as_ref()
+                    .and_then(|p| p.current_focus().map(|s| (s, p)))
+                    .is_some_and(|(surface, pointer)| {
+                        with_pointer_constraint(&surface, pointer, |constraint| {
+                            constraint.is_some_and(|c| c.is_active())
+                        })
+                    });
+                let _ = tx.send_blocking(has_pointer_constraints);
+            });
+            let result = rx.recv().await;
+            let has_pointer_constraints =
+                result.map_err(|_| String::from("error getting pointer constraints state"))?;
+            Response::HasPointerConstraints(HasPointerConstraints {
+                has_pointer_constraints,
+            })
         }
     };
 

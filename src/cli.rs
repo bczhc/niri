@@ -138,6 +138,8 @@ pub enum Msg {
     Casts,
     /// List zoom state of outputs.
     ZoomState,
+    /// Print whether the pointer has active pointer constraints.
+    HasPointerConstraints,
 }
 
 #[derive(Clone, Debug, clap::ValueEnum)]
