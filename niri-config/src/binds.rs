@@ -397,6 +397,11 @@ pub enum Action {
     MruSetScope(MruScope),
     #[knuffel(skip)]
     MruCycleScope,
+    #[knuffel(skip)]
+    SetPointer {
+        x: f64,
+        y: f64,
+    },
 }
 
 impl From<niri_ipc::Action> for Action {
@@ -713,6 +718,7 @@ impl From<niri_ipc::Action> for Action {
             niri_ipc::Action::SetZoomLevel { level, output } => Self::SetZoomLevel(level, output),
             niri_ipc::Action::ToggleZoomLock { output } => Self::ToggleZoomLock(output),
             niri_ipc::Action::LoadConfigFile { path } => Self::LoadConfigFile(path),
+            niri_ipc::Action::SetPointer { x, y } => Self::SetPointer { x, y },
         }
     }
 }

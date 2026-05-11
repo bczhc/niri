@@ -2331,6 +2331,9 @@ impl State {
                     watcher.load_config(path);
                 }
             }
+            Action::SetPointer { x, y } => {
+                self.move_cursor((x, y).into());
+            }
             Action::MruConfirm => {
                 self.confirm_mru();
             }

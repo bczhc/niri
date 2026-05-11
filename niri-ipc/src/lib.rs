@@ -1032,6 +1032,15 @@ pub enum Action {
         #[cfg_attr(feature = "clap", arg(long))]
         path: Option<String>,
     },
+    /// Set the pointer position in logical pixels within the global compositor space.
+    SetPointer {
+        /// X coordinate in logical pixels.
+        #[cfg_attr(feature = "clap", arg(allow_hyphen_values = true))]
+        x: f64,
+        /// Y coordinate in logical pixels.
+        #[cfg_attr(feature = "clap", arg(allow_hyphen_values = true))]
+        y: f64,
+    },
 }
 
 /// Change in window or column size.
