@@ -892,6 +892,7 @@ mod tests {
                 default-window-height { fixed 500; }
                 default-column-display "tabbed"
                 default-floating-position x=100 y=-200 relative-to="bottom-left"
+                float-above-fullscreen true
 
                 focus-ring {
                     off
@@ -1879,6 +1880,7 @@ mod tests {
                             relative_to: BottomLeft,
                         },
                     ),
+                    float_above_fullscreen: Some(true),
                     scroll_factor: None,
                     tiled_state: None,
                     background_effect: BackgroundEffectRule {

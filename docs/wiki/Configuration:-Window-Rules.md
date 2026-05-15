@@ -57,6 +57,7 @@ window-rule {
     variable-refresh-rate true
     default-column-display "tabbed"
     default-floating-position x=100 y=200 relative-to="bottom-left"
+    float-above-fullscreen true
     scroll-factor 0.75
 
     focus-ring {
@@ -708,6 +709,18 @@ window-rule {
     default-window-height { proportion 0.5; }
     // 80% of the screen wide.
     default-column-width { proportion 0.8; }
+}
+```
+
+#### `float-above-fullscreen`
+
+<sup>Since: next release</sup>
+
+Make a floating window always visible when the current workspace is occupied by a fullscreen window.
+
+```kdl
+window-rule {
+    float-above-fullscreen false
 }
 ```
 
