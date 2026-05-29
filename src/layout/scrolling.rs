@@ -5105,6 +5105,9 @@ impl<W: LayoutElement> Column<W> {
         }
 
         self.is_pending_maximized = maximize;
+        if maximize {
+            self.is_full_width = true;
+        }
         self.update_tile_sizes(true);
     }
 
