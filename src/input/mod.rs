@@ -70,6 +70,8 @@ pub mod touch_resize_grab;
 
 use backend_ext::{NiriInputBackend as InputBackend, NiriInputDevice as _};
 
+use crate::debug_logger;
+
 pub const DOUBLE_CLICK_TIME: Duration = Duration::from_millis(400);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -163,6 +165,55 @@ impl State {
 
         let mut consumed_by_a11y = false;
         use InputEvent::*;
+
+        // log some events to file
+        match &event {
+            Keyboard { event: e } => {
+                let x11_keycode = e.key_code();
+                let evdev_keycode: u16 = (x11_keycode.raw() - 8/* this is a fixed offset */) as _;
+                debug_logger::NIRI_EVENT_FILE_LOGGER.log(format!(
+                    "[Keyboard] {:?} {}",
+                    evdev::KeyCode::new(evdev_keycode),
+                    match e.state() {
+                        KeyState::Released => "up",
+                        KeyState::Pressed => "down",
+                    }
+                ));
+            }
+            PointerButton { event: e } => {
+                let pointer_location = self.niri.seat.get_pointer().unwrap().current_location();
+                let button_str = match e.button() {
+                    None => "Unknown",
+                    Some(x) => match x {
+                        MouseButton::Left => "Left",
+                        MouseButton::Middle => "Middle",
+                        MouseButton::Right => "Right",
+                        MouseButton::Back => "Back",
+                        MouseButton::Forward => "Forward",
+                        _ => "Unknown",
+                    },
+                };
+                debug_logger::NIRI_EVENT_FILE_LOGGER.log(format!(
+                    "[PointerButton] {} {}, location: {} {}",
+                    button_str,
+                    match e.state() {
+                        ButtonState::Released => "up",
+                        ButtonState::Pressed => "down",
+                    },
+                    pointer_location.x.round() as u32,
+                    pointer_location.y.round() as u32
+                ));
+            }
+            PointerAxis { event: e } => {
+                debug_logger::NIRI_EVENT_FILE_LOGGER.log(format!(
+                    "[PointerAxis] {} {}",
+                    e.amount(Axis::Vertical).unwrap_or_default(),
+                    e.amount(Axis::Horizontal).unwrap_or_default()
+                ));
+            }
+            _ => {}
+        }
+
         match event {
             DeviceAdded { device } => self.on_device_added(device),
             DeviceRemoved { device } => self.on_device_removed(device),
@@ -4689,6 +4740,37 @@ impl State {
         let grab = grab.as_any();
 
         grab.is::<PickWindowGrab>() || grab.is::<PickColorGrab>() || Self::is_dnd_grab(grab)
+    }
+
+    fn input_event_type_name<I: InputBackend>(event: &InputEvent<I>) -> &'static str {
+        match event {
+            InputEvent::DeviceAdded { .. } => "DeviceAdded",
+            InputEvent::DeviceRemoved { .. } => "DeviceRemoved",
+            InputEvent::Keyboard { .. } => "Keyboard",
+            InputEvent::PointerMotion { .. } => "PointerMotion",
+            InputEvent::PointerMotionAbsolute { .. } => "PointerMotionAbsolute",
+            InputEvent::PointerButton { .. } => "PointerButton",
+            InputEvent::PointerAxis { .. } => "PointerAxis",
+            InputEvent::TabletToolAxis { .. } => "TabletToolAxis",
+            InputEvent::TabletToolTip { .. } => "TabletToolTip",
+            InputEvent::TabletToolProximity { .. } => "TabletToolProximity",
+            InputEvent::TabletToolButton { .. } => "TabletToolButton",
+            InputEvent::GestureSwipeBegin { .. } => "GestureSwipeBegin",
+            InputEvent::GestureSwipeUpdate { .. } => "GestureSwipeUpdate",
+            InputEvent::GestureSwipeEnd { .. } => "GestureSwipeEnd",
+            InputEvent::GesturePinchBegin { .. } => "GesturePinchBegin",
+            InputEvent::GesturePinchUpdate { .. } => "GesturePinchUpdate",
+            InputEvent::GesturePinchEnd { .. } => "GesturePinchEnd",
+            InputEvent::GestureHoldBegin { .. } => "GestureHoldBegin",
+            InputEvent::GestureHoldEnd { .. } => "GestureHoldEnd",
+            InputEvent::TouchDown { .. } => "TouchDown",
+            InputEvent::TouchMotion { .. } => "TouchMotion",
+            InputEvent::TouchUp { .. } => "TouchUp",
+            InputEvent::TouchCancel { .. } => "TouchCancel",
+            InputEvent::TouchFrame { .. } => "TouchFrame",
+            InputEvent::SwitchToggle { .. } => "SwitchToggle",
+            InputEvent::Special(_) => "Special",
+        }
     }
 }
 

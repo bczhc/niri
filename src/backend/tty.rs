@@ -62,7 +62,7 @@ use smithay::wayland::presentation::Refresh;
 use smithay_drm_extras::drm_scanner::{DrmScanEvent, DrmScanner};
 use wayland_protocols::wp::linux_dmabuf::zv1::server::zwp_linux_dmabuf_feedback_v1::TrancheFlags;
 use wayland_protocols::wp::presentation_time::server::wp_presentation_feedback;
-
+use crate::debug_logger;
 use super::{virtual_output, IpcOutputMap, OutputId, RenderResult, VirtualOutputMarker};
 use crate::frame_clock::FrameClock;
 use crate::niri::{Niri, RedrawState, State};
@@ -463,6 +463,7 @@ impl Tty {
             libinput.suspend();
         }
 
+        debug_logger::init_all();
         let input_backend = LibinputInputBackend::new(libinput.clone());
         event_loop
             .insert_source(input_backend, |mut event, _, state| {
