@@ -51,7 +51,7 @@ use crate::layout::scrolling::ScrollDirection;
 use crate::layout::{ActivateWindow, LayoutElement as _};
 use crate::niri::{CastTarget, PointerVisibility, State};
 use crate::ui::mru::{WindowMru, WindowMruUi};
-use crate::ui::screenshot_ui::ScreenshotUi;
+use crate::ui::screenshot_ui::{DragStart, ScreenshotUi};
 use crate::utils::spawning::{spawn, spawn_sh};
 use crate::utils::zoom::zoom_display_cursor_logical;
 use crate::utils::{center, get_monotonic_time, CastSessionId, ResizeEdge};
@@ -3296,11 +3296,13 @@ impl State {
             if button_state == ButtonState::Pressed {
                 let pos = pointer.current_location();
 
-                // If we'll be moving the existing selection, use the selection output.
-                let output = if mod_down {
-                    self.niri.screenshot_ui.selection_output()
+                // If we'll be moving or resizing the existing selection, use the selection output.
+                let (output, drag) = if modifiers.contains(Modifiers::CTRL) {
+                    (self.niri.screenshot_ui.selection_output(), DragStart::Resize)
+                } else if modifiers.contains(Modifiers::SHIFT) {
+                    (self.niri.screenshot_ui.selection_output(), DragStart::Move)
                 } else {
-                    self.niri.output_under(pos).map(|(out, _)| out)
+                    (self.niri.output_under(pos).map(|(out, _)| out), DragStart::New)
                 };
 
                 if let Some(output) = output.cloned() {
@@ -3310,7 +3312,7 @@ impl State {
                     if self
                         .niri
                         .screenshot_ui
-                        .pointer_down(output, point, None, mod_down)
+                        .pointer_down(output, point, None, drag)
                     {
                         self.niri.queue_redraw_all();
                     }
@@ -3321,6 +3323,18 @@ impl State {
                 } else {
                     self.niri.queue_redraw_all();
                 }
+            }
+        }
+
+        if button == Some(MouseButton::Middle)
+            && self.niri.screenshot_ui.is_open()
+            && button_state == ButtonState::Pressed
+        {
+            let pos = pointer.current_location();
+            if let Some((output, _)) = self.niri.output_under(pos) {
+                let output = output.clone();
+                self.niri.screenshot_ui.select_full_screen(output);
+                self.niri.queue_redraw_all();
             }
         }
 
@@ -3931,10 +3945,10 @@ impl State {
                         let mod_down = modifiers.contains(mod_key.to_modifiers());
 
                         // If we'll be moving the existing selection, use the selection output.
-                        let output = if mod_down {
-                            self.niri.screenshot_ui.selection_output()
+                        let (output, drag) = if mod_down {
+                            (self.niri.screenshot_ui.selection_output(), DragStart::Move)
                         } else {
-                            under.output.as_ref()
+                            (under.output.as_ref(), DragStart::New)
                         };
 
                         if let Some(output) = output.cloned() {
@@ -3943,7 +3957,7 @@ impl State {
                             if self
                                 .niri
                                 .screenshot_ui
-                                .pointer_down(output, point, None, mod_down)
+                                .pointer_down(output, point, None, drag)
                             {
                                 self.niri.queue_redraw_all();
                             }
@@ -4520,10 +4534,10 @@ impl State {
 
         if self.niri.screenshot_ui.is_open() {
             // If we'll be moving the existing selection, use the selection output.
-            let output = if mod_down {
-                self.niri.screenshot_ui.selection_output()
+            let (output, drag) = if mod_down {
+                (self.niri.screenshot_ui.selection_output(), DragStart::Move)
             } else {
-                under.output.as_ref()
+                (under.output.as_ref(), DragStart::New)
             };
 
             if let Some(output) = output.cloned() {
@@ -4532,7 +4546,7 @@ impl State {
                 if self
                     .niri
                     .screenshot_ui
-                    .pointer_down(output, point, Some(slot), mod_down)
+                    .pointer_down(output, point, Some(slot), drag)
                 {
                     self.niri.queue_redraw_all();
                 }

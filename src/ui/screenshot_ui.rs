@@ -43,12 +43,18 @@ const PADDING: i32 = 8;
 const RADIUS: i32 = 16;
 const FONT: &str = "sans 14px";
 const BORDER: i32 = 4;
-const TEXT_HIDE_P: &str =
+const TEXT_HIDE_T: &str =
     "Press <span face='mono' bgcolor='#2C2C2C'> Space </span> to save the screenshot.\n\
-     Press <span face='mono' bgcolor='#2C2C2C'> P </span> to hide the pointer.";
-const TEXT_SHOW_P: &str =
+     Press <span face='mono' bgcolor='#2C2C2C'> T </span> to hide the pointer.\n\
+     <span face='mono' bgcolor='#2C2C2C'> Shift </span>+drag to move, \
+     <span face='mono' bgcolor='#2C2C2C'> Ctrl </span>+drag to resize, \
+     middle-click to select the full screen.";
+const TEXT_SHOW_T: &str =
     "Press <span face='mono' bgcolor='#2C2C2C'> Space </span> to save the screenshot.\n\
-     Press <span face='mono' bgcolor='#2C2C2C'> P </span> to show the pointer.";
+     Press <span face='mono' bgcolor='#2C2C2C'> T </span> to show the pointer.\n\
+     <span face='mono' bgcolor='#2C2C2C'> Shift </span>+drag to move, \
+     <span face='mono' bgcolor='#2C2C2C'> Ctrl </span>+drag to resize, \
+     middle-click to select the full screen.";
 
 // Ideally the screenshot UI should support cross-output selections. However, that poses some
 // technical challenges when the outputs have different scales and such. So, this implementation
@@ -82,6 +88,16 @@ pub struct MoveState {
     // If the move is initiated by a touch, this is the slot. If `None`, the move was initiated by
     // holding Space.
     touch_slot: Option<TouchSlot>,
+}
+
+/// What kind of drag a pointer press should start.
+pub enum DragStart {
+    /// Draw a new selection.
+    New,
+    /// Move the existing selection.
+    Move,
+    /// Resize the existing selection, keeping the farthest corner fixed.
+    Resize,
 }
 
 pub enum Button {
@@ -225,8 +241,8 @@ impl ScreenshotUi {
                         .map_err(|err| warn!("error rendering help panel: {err:?}"))
                         .ok()
                 };
-                let panel_show = render_panel_(TEXT_SHOW_P);
-                let panel_hide = render_panel_(TEXT_HIDE_P);
+                let panel_show = render_panel_(TEXT_SHOW_T);
+                let panel_hide = render_panel_(TEXT_HIDE_T);
                 let panel = Option::zip(panel_show, panel_hide);
 
                 let data = OutputData {
@@ -583,6 +599,30 @@ impl ScreenshotUi {
         let new_size = new_size.clamp(1, data.size.h - min(a.y, b.y)) - 1;
         a.y = min(a.y, b.y);
         b.y = a.y + new_size;
+
+        self.update_buffers();
+    }
+
+    /// Selects the entire screen of the given output.
+    pub fn select_full_screen(&mut self, output: Output) {
+        let Self::Open {
+            selection,
+            output_data,
+            ..
+        } = self
+        else {
+            return;
+        };
+
+        let Some(data) = output_data.get(&output) else {
+            return;
+        };
+
+        *selection = (
+            output,
+            Point::from((0, 0)),
+            Point::from((data.size.w - 1, data.size.h - 1)),
+        );
 
         self.update_buffers();
     }
@@ -1019,7 +1059,7 @@ impl ScreenshotUi {
         output: Output,
         point: Point<i32, Physical>,
         slot: Option<TouchSlot>,
-        move_existing: bool,
+        drag: DragStart,
     ) -> bool {
         let Self::Open {
             selection,
@@ -1054,21 +1094,67 @@ impl ScreenshotUi {
             return false;
         }
 
-        if move_existing {
-            if output != selection.0 {
-                return false;
-            }
+        match drag {
+            DragStart::Move => {
+                if output != selection.0 {
+                    return false;
+                }
 
-            *button = Button::Down {
-                touch_slot: slot,
-                on_capture_button: false,
-                last_pos: (output, point),
-                move_state: Some(MoveState {
-                    pointer_offset: point - selection.1,
+                *button = Button::Down {
                     touch_slot: slot,
-                }),
-            };
-            return true;
+                    on_capture_button: false,
+                    last_pos: (output, point),
+                    move_state: Some(MoveState {
+                        pointer_offset: point - selection.1,
+                        touch_slot: slot,
+                    }),
+                };
+                return true;
+            }
+            DragStart::Resize => {
+                if output != selection.0 {
+                    return false;
+                }
+
+                let Some(output_data) = output_data.get(&output) else {
+                    return false;
+                };
+
+                // Keep the corner farthest from the click fixed, and drag the nearest corner.
+                let rect = rect_from_corner_points(selection.1, selection.2);
+                let corners = [
+                    rect.loc,
+                    Point::from((rect.loc.x + rect.size.w - 1, rect.loc.y)),
+                    Point::from((rect.loc.x, rect.loc.y + rect.size.h - 1)),
+                    Point::from((rect.loc.x + rect.size.w - 1, rect.loc.y + rect.size.h - 1)),
+                ];
+                let anchor = corners
+                    .into_iter()
+                    .max_by_key(|corner| {
+                        let dx = corner.x - point.x;
+                        let dy = corner.y - point.y;
+                        dx * dx + dy * dy
+                    })
+                    .unwrap();
+
+                let point = Point::new(
+                    point.x.clamp(0, output_data.size.w - 1),
+                    point.y.clamp(0, output_data.size.h - 1),
+                );
+
+                *button = Button::Down {
+                    touch_slot: slot,
+                    on_capture_button: false,
+                    last_pos: (output.clone(), point),
+                    move_state: None,
+                };
+                *selection = (output, anchor, point);
+
+                self.update_buffers();
+
+                return true;
+            }
+            DragStart::New => {}
         }
 
         let Some(output_data) = output_data.get(&output) else {
@@ -1255,7 +1341,7 @@ fn action(raw: Keysym, mods: ModifiersState) -> Option<Action> {
         });
     }
 
-    if !mods.ctrl && (raw == Keysym::p || raw == Keysym::t) {
+    if !mods.ctrl && raw == Keysym::t {
         return Some(Action::ScreenshotTogglePointer);
     }
 
